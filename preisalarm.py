@@ -79,8 +79,8 @@ def get_night_snek_ratio():
 
     asset_a_ticker = data["asset_a"]["metadata"]["ticker"]
     asset_b_ticker = data["asset_b"]["metadata"]["ticker"]
-    liquidity_a = data["liquidity_a_raw"]
-    liquidity_b = data["liquidity_b_raw"]
+    liquidity_a = data["liquidity_a"]
+    liquidity_b = data["liquidity_b"]
 
     print(f"Pool-Zusammensetzung: {asset_a_ticker} ({liquidity_a}) / {asset_b_ticker} ({liquidity_b})")
 
