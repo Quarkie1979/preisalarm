@@ -7,7 +7,7 @@ on:
   workflow_dispatch: # Ermöglicht es dir, das Skript jederzeit manuell in GitHub zu starten
 
 permissions:
-  contents: write # Ganz wichtig: Gibt GitHub die Erlaubnis, die alarm_state.txt zu speichern
+  contents: write # Wichtig: Gibt GitHub die Erlaubnis, die alarm_state.txt im Repository zu speichern
 
 jobs:
   run-price-alert:
@@ -33,6 +33,7 @@ jobs:
       env:
         PUSHOVER_USER_KEY: ${{ secrets.PUSHOVER_USER_KEY }}
         PUSHOVER_API_TOKEN: ${{ secrets.PUSHOVER_API_TOKEN }}
+        BLOCKFROST_PROJECT_ID: ${{ secrets.BLOCKFROST_PROJECT_ID }}
       run: python preisalarm.py
 
     - name: Speicher Zustand fuer das naechste Mal
@@ -41,7 +42,7 @@ jobs:
         git config --local user.name "GitHub Action"
         # Fügt die Datei hinzu, falls sie erstellt oder geändert wurde
         git add alarm_state.txt || true
-        # Falls die Datei gelöscht wurde (Normalbereich), wird das auch vorgemerkt
+        # Falls die Datei gelöscht wurde (Normalbereich), wird das auch im Git-Index vorgemerkt
         git rm alarm_state.txt || true 
         git commit -m "Update alarm state [skip ci]" || true
         git push || true
