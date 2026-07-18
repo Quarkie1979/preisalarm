@@ -32,45 +32,46 @@ def send_push_notification(message):
 
 def get_pool_ratio_from_blockfrost(pool_address, token_decimals):
     """
-    Fragt die Pool-Adresse über Blockfrost ab. 
-    Nutzt den erweiterten Sicherheitscheck gegen Status 400.
+    Fragt die UTXOs der Pool-Adresse ab, um die exakten Mengen zu berechnen.
+    Das verhindert den Fehler 400 bei langen Smart-Contract-Adressen.
     """
-    # Verhindert Whitespace-Fehler in der URL
     clean_address = pool_address.strip()
-    url = f"https://cardano-mainnet.blockfrost.io/api/v0/addresses/{clean_address}"
+    # Wir wechseln auf den stabilen UTXO Endpunkt für Smart Contracts
+    url = f"https://cardano-mainnet.blockfrost.io/api/v0/addresses/{clean_address}/utxos"
     headers = {"project_id": BLOCKFROST_PROJECT_ID}
     
     try:
         res = requests.get(url, headers=headers, timeout=15)
         
         if res.status_code == 400:
-            print(f"❌ Blockfrost Fehler 400: Ungültiges Adressformat an Blockfrost übergeben!")
+            print(f"❌ Blockfrost Fehler 400: Das Adressformat wird vom API-Endpunkt abgelehnt.")
             return None
         elif res.status_code == 403:
             print("❌ Blockfrost Fehler 403: Ungültiger Project ID Key!")
             return None
         elif res.status_code == 404:
-            print("❌ Blockfrost Fehler 404: Pool-Adresse auf der Blockchain nicht gefunden!")
+            print("❌ Blockfrost Fehler 404: Pool-Adresse wurde auf der Blockchain nicht gefunden.")
             return None
         elif res.status_code != 200:
             print(f"⚠️ Blockfrost API meldet Status: {res.status_code}")
             return None
             
-        data = res.json()
-        # Fallback falls 'amount' nicht existiert
-        amounts = data.get("amount", [])
+        utxos = res.json()
         
         ada_lovelace = 0
         token_units = 0
         
-        for item in amounts:
-            if item.get("unit") == "lovelace":
-                ada_lovelace = int(item.get("quantity", 0))
-            else:
-                token_units = int(item.get("quantity", 0))
-                
+        # Wir laufen durch alle UTXOs (Boxen), die auf der Adresse liegen, und addieren die Werte
+        for utxo in utxos:
+            amounts = utxo.get("amount", [])
+            for item in amounts:
+                if item.get("unit") == "lovelace":
+                    ada_lovelace += int(item.get("quantity", 0))
+                else:
+                    token_units += int(item.get("quantity", 0))
+                    
         if ada_lovelace == 0 or token_units == 0:
-            print("❌ Fehler: Pool-Bestände (ADA oder Token) sind leer oder konnten nicht identifiziert werden.")
+            print("❌ Fehler: Pool-Bestände konnten aus den UTXOs nicht ausgelesen werden.")
             return None
             
         real_ada = ada_lovelace / 1_000_000
@@ -114,20 +115,20 @@ def clear_alert_state():
             print(f"Fehler beim Löschen der Statusdatei: {e}")
 
 def check_crypto_prices():
-    print("Starte On-Chain Pool-Abfrage über Blockfrost...")
+    print("Starte On-Chain Pool-Abfrage über Blockfrost UTXOs...")
     
     if not BLOCKFROST_PROJECT_ID:
         print("❌ FEHLER: BLOCKFROST_PROJECT_ID Environment Variable fehlt!")
         return
 
-    # Offizielle Minswap V1 Kontrakt-Pools im sauberen String-Format ohne versteckte Leerzeichen
+    # Offizielle Minswap V1 Mainnet Pool-Adressen
     NIGHT_ADA_POOL = "addr1z8snz5g3k822f3xzs3q480j6nrc4z3v6xfl6gfnf28876ux5w6znccu8v0tpx4cr3pxe0p3p54p7vpe6v2tpx4cr3pxs3l2d27" 
     SNEK_ADA_POOL  = "addr1z9xnz5g3k822f3xzs3q480j6nrc4z3v6xfl6gfnf28876ux5w6znccu8v0tpx4cr3pxe0p3p54p7vpe6v2tpx4cr3pxs7q9d3g"
 
-    # 1. ADA-Wert pro NIGHT
+    # 1. ADA-Wert pro NIGHT (6 Decimals)
     ada_per_night = get_pool_ratio_from_blockfrost(NIGHT_ADA_POOL, token_decimals=6)
     
-    # 2. ADA-Wert pro SNEK
+    # 2. ADA-Wert pro SNEK (0 Decimals)
     ada_per_snek = get_pool_ratio_from_blockfrost(SNEK_ADA_POOL, token_decimals=0)
     
     if ada_per_night is None or ada_per_snek is None:
