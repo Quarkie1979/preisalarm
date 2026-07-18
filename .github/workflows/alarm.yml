@@ -25,8 +25,9 @@ jobs:
 
       - name: Skript ausfuehren
         env:
-          # VORHER hieß es hier BLOCKFROST_KEY – jetzt passt es exakt zum Python-Code!
+          # Diese Namen müssen exakt mit os.environ.get() im Python-Code übereinstimmen
           BLOCKFROST_PROJECT_ID: ${{ secrets.BLOCKFROST_PROJECT_ID }}
           PUSHOVER_USER_KEY: ${{ secrets.PUSHOVER_USER_KEY }}
           PUSHOVER_API_TOKEN: ${{ secrets.PUSHOVER_API_TOKEN }}
-     run: python -u preisalarm.py
+        # Das "-u" sorgt dafür, dass die Textausgabe sofort im Live-Log erscheint
+        run: python -u preisalarm.py
