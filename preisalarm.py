@@ -10,6 +10,7 @@ OBERE_GRENZE = 100
 # --- GITHUB SECRETS AUSLESEN ---
 PUSHOVER_USER_KEY = os.environ.get("PUSHOVER_USER_KEY")
 PUSHOVER_API_TOKEN = os.environ.get("PUSHOVER_API_TOKEN")
+BLOCKFROST_PROJECT_ID = os.environ.get("BLOCKFROST_PROJECT_ID")
 
 def send_push_notification(message):
     """Sendet die Benachrichtigung an dein Smartphone via Pushover"""
@@ -29,17 +30,20 @@ def send_push_notification(message):
     except Exception as e:
         print(f"Fehler beim Senden der Push-Nachricht: {e}")
 
-def get_minswap_pool_prices():
+def get_minswap_prices_via_blockfrost():
     """
-    Fragt die offizielle, öffentliche Minswap API ab.
-    Gibt den ADA-Preis für NIGHT und SNEK direkt aus dem Liquiditätspool zurück.
+    Nutzt den spezialisierten Minswap-DEX-Endpunkt von Blockfrost.
+    Das umgeht DNS-Fehler von externen APIs und das Adressformat-Problem.
     """
-    url = "https://api-mainnet.minswap.org/v1/pools"
+    # Blockfrost hat einen direkten Endpunkt, um Minswap V1 Pools abzufragen
+    url = "https://cardano-mainnet.blockfrost.io/api/v0/backend/minswap/pools"
+    headers = {"project_id": BLOCKFROST_PROJECT_ID}
+    
     try:
-        # Wir holen uns die aktuellen Top-Pools von Minswap
-        res = requests.get(url, timeout=15)
+        res = requests.get(url, headers=headers, timeout=15)
+        
         if res.status_code != 200:
-            print(f"❌ Minswap API Fehler: Status {res.status_code}")
+            print(f"❌ Blockfrost Minswap-Endpunkt fehlgeschlagen (Status {res.status_code})")
             return None, None
             
         pools = res.json()
@@ -47,43 +51,41 @@ def get_minswap_pool_prices():
         ada_per_night = None
         ada_per_snek = None
         
-        # Wir durchlaufen die Pools und suchen anhand der exakten Token-Policy-IDs
+        # Die Policy IDs unserer beiden Token
+        NIGHT_POLICY = "e16561023d06eb1af278508ee0e18c09adcb69e9e99ebfe9826e6967"
+        SNEK_POLICY  = "279c909f343cd051c11a3da366b2a6eb29971aeaf0e7be02cd19e115"
+        
         for pool in pools:
-            asset_a = pool.get("assetA", {}).get("currencySymbol", "")
-            asset_b = pool.get("assetB", {}).get("currencySymbol", "")
+            # Blockfrost strukturiert die Assets meistens als 'asset_a' und 'asset_b'
+            asset_a = pool.get("asset_a", "")
+            asset_b = pool.get("asset_b", "")
             
-            # 1. NIGHT-ADA Pool suchen
-            # Policy ID von NIGHT: e16561...
-            if (asset_a == "e16561023d06eb1af278508ee0e18c09adcb69e9e99ebfe9826e6967" and asset_b == "lovelace") or \
-               (asset_b == "e16561023d06eb1af278508ee0e18c09adcb69e9e99ebfe9826e6967" and asset_a == "lovelace"):
+            # --- 1. NIGHT Pool suchen ---
+            if asset_a == NIGHT_POLICY or asset_b == NIGHT_POLICY:
+                reserve_a = int(pool.get("reserve_a", 0))
+                reserve_b = int(pool.get("reserve_b", 0))
                 
-                # Preisberechnung unter Berücksichtigung der Decimals (NIGHT = 6, ADA = 6)
-                reserve_a = int(pool.get("reserveA", 0))
-                reserve_b = int(pool.get("reserveB", 0))
-                
-                if asset_a == "lovelace":
+                # Lovelace (ADA) ist bei Blockfrost immer das leere Asset ""
+                if asset_a == "":  # Asset A ist ADA, Asset B ist NIGHT
                     ada_per_night = (reserve_a / 1_000_000) / (reserve_b / 1_000_000)
-                else:
+                elif asset_b == "": # Asset B ist ADA, Asset A ist NIGHT
                     ada_per_night = (reserve_b / 1_000_000) / (reserve_a / 1_000_000)
 
-            # 2. SNEK-ADA Pool suchen
-            # Policy ID von SNEK: 279c90...
-            if (asset_a == "279c909f343cd051c11a3da366b2a6eb29971aeaf0e7be02cd19e115" and asset_b == "lovelace") or \
-               (asset_b == "279c909f343cd051c11a3da366b2a6eb29971aeaf0e7be02cd19e115" and asset_a == "lovelace"):
+            # --- 2. SNEK Pool suchen ---
+            if asset_a == SNEK_POLICY or asset_b == SNEK_POLICY:
+                reserve_a = int(pool.get("reserve_a", 0))
+                reserve_b = int(pool.get("reserve_b", 0))
                 
-                reserve_a = int(pool.get("reserveA", 0))
-                reserve_b = int(pool.get("reserveB", 0))
-                
-                # SNEK hat 0 Decimals, ADA hat 6 Decimals
-                if asset_a == "lovelace":
+                # SNEK hat 0 Decimals, ADA ("") hat 6 Decimals
+                if asset_a == "":  # Asset A ist ADA, Asset B ist SNEK
                     ada_per_snek = (reserve_a / 1_000_000) / reserve_b
-                else:
+                elif asset_b == "": # Asset B ist ADA, Asset A ist SNEK
                     ada_per_snek = (reserve_b / 1_000_000) / reserve_a
 
         return ada_per_night, ada_per_snek
 
     except Exception as e:
-        print(f"Verbindungsfehler zur Minswap API: {e}")
+        print(f"Verbindungsfehler bei Blockfrost-Minswap-Abfrage: {e}")
         return None, None
 
 def load_last_alert_threshold():
@@ -114,12 +116,16 @@ def clear_alert_state():
             print(f"Fehler beim Löschen der Statusdatei: {e}")
 
 def check_crypto_prices():
-    print("Starte Pool-Abfrage direkt über die Minswap-API...")
+    print("Starte Minswap-Pool-Abfrage via Blockfrost DEX-Brücke...")
     
-    ada_per_night, ada_per_snek = get_minswap_pool_prices()
+    if not BLOCKFROST_PROJECT_ID:
+        print("❌ FEHLER: BLOCKFROST_PROJECT_ID Environment Variable fehlt!")
+        return
+
+    ada_per_night, ada_per_snek = get_minswap_prices_via_blockfrost()
     
     if ada_per_night is None or ada_per_snek is None:
-        print("❌ FEHLER: Daten konnten von Minswap nicht geladen werden.")
+        print("❌ FEHLER: On-Chain Daten über Blockfrost-Minswap-Brücke konnten nicht geladen werden.")
         return
 
     print(f"Minswap-Preise: 1 NIGHT = {ada_per_night:.6f} ADA | 1 SNEK = {ada_per_snek:.6f} ADA")
