@@ -25,8 +25,8 @@ jobs:
 
       - name: Skript ausfuehren
         env:
-          # Hier verknüpfen wir die geheimen Schlüssel mit deinem Skript
-          BLOCKFROST_KEY: ${{ secrets.BLOCKFROST_PROJECT_ID }}
-          PUSHOVER_USER: ${{ secrets.PUSHOVER_USER_KEY }}
-          PUSHOVER_TOKEN: ${{ secrets.PUSHOVER_API_TOKEN }}
+          # VORHER hieß es hier BLOCKFROST_KEY – jetzt passt es exakt zum Python-Code!
+          BLOCKFROST_PROJECT_ID: ${{ secrets.BLOCKFROST_PROJECT_ID }}
+          PUSHOVER_USER_KEY: ${{ secrets.PUSHOVER_USER_KEY }}
+          PUSHOVER_API_TOKEN: ${{ secrets.PUSHOVER_API_TOKEN }}
         run: python preisalarm.py
