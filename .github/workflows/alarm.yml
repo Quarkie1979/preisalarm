@@ -3,7 +3,7 @@ name: Krypto Alarm Cronjob
 on:
   schedule:
     # Läuft alle 15 Minuten rund um die Uhr
-    - cron: '*/15 * * * *'
+    - cron: '*/5 * * * *'
   workflow_dispatch: # Ermöglicht es dir, das Skript jederzeit manuell per Klick zu testen
 
 jobs:
