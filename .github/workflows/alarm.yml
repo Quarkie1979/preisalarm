@@ -1,0 +1,32 @@
+name: Krypto Alarm Cronjob
+
+on:
+  schedule:
+    # Läuft alle 15 Minuten rund um die Uhr
+    - cron: '*/15 * * * *'
+  workflow_dispatch: # Ermöglicht es dir, das Skript jederzeit manuell per Klick zu testen
+
+jobs:
+  run-script:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Code auschecken
+        uses: actions/checkout@v4
+
+      - name: Python einrichten
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Abhaengigkeiten installieren
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests
+
+      - name: Skript ausfuehren
+        env:
+          # Hier verknüpfen wir die geheimen Schlüssel mit deinem Skript
+          BLOCKFROST_KEY: ${{ secrets.BLOCKFROST_PROJECT_ID }}
+          PUSHOVER_USER: ${{ secrets.PUSHOVER_USER_KEY }}
+          PUSHOVER_TOKEN: ${{ secrets.PUSHOVER_API_TOKEN }}
+        run: python preisalarm.py
