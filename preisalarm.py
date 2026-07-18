@@ -2,9 +2,9 @@ import time
 import requests
 
 # --- HIER DEINE BLOCKFROST- UND PUSHOVER-DATEN EINTRAGEN ---
-BLOCKFROST_PROJECT_ID = "mainnetrFvgxBgXDoP07A51fPs5fobI5iXZWreX"
-PUSHOVER_USER_KEY = "umjxiv72grbwwe7wo81j41mm4pk97u"
-PUSHOVER_API_TOKEN = "agsqcwc5sbhxvkdqwmv83zvwcr3d2q"
+BLOCKFROST_PROJECT_ID = os.environ.get("BLOCKFROST_KEY")
+PUSHOVER_USER_KEY = os.environ.get("PUSHOVER_USER")
+PUSHOVER_API_TOKEN = os.environ.get("PUSHOVER_TOKEN")"
 
 # Zustands-Speicher
 letzter_gemeldeter_wert = None
