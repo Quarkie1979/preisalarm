@@ -4,7 +4,7 @@ import requests
 
 # --- CONFIGURATION ---
 STATE_FILE = "alarm_state.txt"
-UNTERE_GRENZE = 95
+UNTERE_GRENZE = 80
 OBERE_GRENZE = 100
 
 # --- GITHUB SECRETS AUSLESEN ---
@@ -32,26 +32,32 @@ def send_push_notification(message):
 
 def get_pool_ratio_from_blockfrost(pool_address, token_decimals):
     """
-    Fragt eine Minswap Pool-Adresse über Blockfrost ab und berechnet
-    den exakten ADA-Wert eines einzelnen Tokens unter Berücksichtigung der Decimals.
+    Fragt die Pool-Adresse über Blockfrost ab. 
+    Nutzt den erweiterten Sicherheitscheck gegen Status 400.
     """
-    url = f"https://cardano-mainnet.blockfrost.io/api/v0/addresses/{pool_address}"
+    # Verhindert Whitespace-Fehler in der URL
+    clean_address = pool_address.strip()
+    url = f"https://cardano-mainnet.blockfrost.io/api/v0/addresses/{clean_address}"
     headers = {"project_id": BLOCKFROST_PROJECT_ID}
     
     try:
         res = requests.get(url, headers=headers, timeout=15)
         
-        if res.status_code == 403:
-            print("❌ Blockfrost Fehler: Ungültiger Project ID Key!")
+        if res.status_code == 400:
+            print(f"❌ Blockfrost Fehler 400: Ungültiges Adressformat an Blockfrost übergeben!")
+            return None
+        elif res.status_code == 403:
+            print("❌ Blockfrost Fehler 403: Ungültiger Project ID Key!")
             return None
         elif res.status_code == 404:
-            print("❌ Blockfrost Fehler: Pool-Adresse nicht gefunden! (Prüfe Mainnet vs. Testnet Key)")
+            print("❌ Blockfrost Fehler 404: Pool-Adresse auf der Blockchain nicht gefunden!")
             return None
         elif res.status_code != 200:
             print(f"⚠️ Blockfrost API meldet Status: {res.status_code}")
             return None
             
         data = res.json()
+        # Fallback falls 'amount' nicht existiert
         amounts = data.get("amount", [])
         
         ada_lovelace = 0
@@ -61,21 +67,15 @@ def get_pool_ratio_from_blockfrost(pool_address, token_decimals):
             if item.get("unit") == "lovelace":
                 ada_lovelace = int(item.get("quantity", 0))
             else:
-                # Das andere Asset im Pool ist das gesuchte Token
                 token_units = int(item.get("quantity", 0))
                 
         if ada_lovelace == 0 or token_units == 0:
-            print("❌ Fehler: Pool-Bestände konnten nicht ausgelesen werden.")
+            print("❌ Fehler: Pool-Bestände (ADA oder Token) sind leer oder konnten nicht identifiziert werden.")
             return None
             
-        # Mathematische Umrechnung anhand der Dezimalstellen:
-        # Echte ADA im Pool = lovelace / 1.000.000
         real_ada = ada_lovelace / 1_000_000
-        
-        # Echte Token-Menge im Pool = Einheiten / (10 hoch decimals)
         real_tokens = token_units / (10 ** token_decimals)
         
-        # Preis des Tokens ausgedrückt in ADA
         token_ada_price = real_ada / real_tokens if real_tokens > 0 else 0
         return token_ada_price
 
@@ -120,21 +120,20 @@ def check_crypto_prices():
         print("❌ FEHLER: BLOCKFROST_PROJECT_ID Environment Variable fehlt!")
         return
 
-    # Offizielle Minswap V1 Mainnet Pool-Adressen
+    # Offizielle Minswap V1 Kontrakt-Pools im sauberen String-Format ohne versteckte Leerzeichen
     NIGHT_ADA_POOL = "addr1z8snz5g3k822f3xzs3q480j6nrc4z3v6xfl6gfnf28876ux5w6znccu8v0tpx4cr3pxe0p3p54p7vpe6v2tpx4cr3pxs3l2d27" 
     SNEK_ADA_POOL  = "addr1z9xnz5g3k822f3xzs3q480j6nrc4z3v6xfl6gfnf28876ux5w6znccu8v0tpx4cr3pxe0p3p54p7vpe6v2tpx4cr3pxs7q9d3g"
 
-    # 1. ADA-Wert pro NIGHT (NIGHT hat 6 Decimals)
+    # 1. ADA-Wert pro NIGHT
     ada_per_night = get_pool_ratio_from_blockfrost(NIGHT_ADA_POOL, token_decimals=6)
     
-    # 2. ADA-Wert pro SNEK (SNEK hat 0 Decimals)
+    # 2. ADA-Wert pro SNEK
     ada_per_snek = get_pool_ratio_from_blockfrost(SNEK_ADA_POOL, token_decimals=0)
     
     if ada_per_night is None or ada_per_snek is None:
         print("❌ FEHLER: On-Chain Pool-Daten konnten nicht vollständig geladen werden.")
         return
 
-    # Verhältnis berechnen: Wie viele SNEK kriegt man für ein NIGHT?
     raw_ratio = ada_per_night / ada_per_snek if ada_per_snek > 0 else 0
     if raw_ratio == 0:
         print("Fehler: SNEK Pool-Wert berechnet sich als 0.")
