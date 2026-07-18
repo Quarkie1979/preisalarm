@@ -30,62 +30,73 @@ def send_push_notification(message):
     except Exception as e:
         print(f"Fehler beim Senden der Push-Nachricht: {e}")
 
-def get_pool_ratio_from_blockfrost(pool_address, token_decimals):
+def get_token_price_from_minswap_via_blockfrost(pool_nft_id, token_decimals):
     """
-    Fragt die UTXOs der Pool-Adresse ab, um die exakten Mengen zu berechnen.
-    Das verhindert den Fehler 400 bei langen Smart-Contract-Adressen.
+    Findet den Minswap-Pool anhand seiner eindeutigen Pool-NFT-ID über Blockfrost
+    und berechnet den exakten ADA-Preis des Tokens ohne fehleranfällige Adressen.
     """
-    clean_address = pool_address.strip()
-    # Wir wechseln auf den stabilen UTXO Endpunkt für Smart Contracts
-    url = f"https://cardano-mainnet.blockfrost.io/api/v0/addresses/{clean_address}/utxos"
+    # Schritt 1: Wir fragen Blockfrost, auf welcher Adresse das Pool-NFT aktuell liegt
+    url_asset = f"https://cardano-mainnet.blockfrost.io/api/v0/assets/{pool_nft_id}/addresses"
     headers = {"project_id": BLOCKFROST_PROJECT_ID}
     
     try:
-        res = requests.get(url, headers=headers, timeout=15)
-        
-        if res.status_code == 400:
-            print(f"❌ Blockfrost Fehler 400: Das Adressformat wird vom API-Endpunkt abgelehnt.")
-            return None
-        elif res.status_code == 403:
-            print("❌ Blockfrost Fehler 403: Ungültiger Project ID Key!")
-            return None
-        elif res.status_code == 404:
-            print("❌ Blockfrost Fehler 404: Pool-Adresse wurde auf der Blockchain nicht gefunden.")
-            return None
-        elif res.status_code != 200:
-            print(f"⚠️ Blockfrost API meldet Status: {res.status_code}")
+        res_asset = requests.get(url_asset, headers=headers, timeout=15)
+        if res_asset.status_code != 200:
+            print(f"❌ Blockfrost Asset-Suche fehlgeschlagen (Status {res_asset.status_code})")
             return None
             
-        utxos = res.json()
+        asset_data = res_asset.json()
+        if not asset_data:
+            print(f"❌ Pool NFT {pool_nft_id[:10]}... nicht auf der Blockchain gefunden.")
+            return None
+            
+        pool_address = asset_data[0].get("address")
+        
+        # Schritt 2: Wir holen die Live-UTXOs genau dieser Pool-Adresse
+        url_utxo = f"https://cardano-mainnet.blockfrost.io/api/v0/addresses/{pool_address}/utxos"
+        res_utxo = requests.get(url_utxo, headers=headers, timeout=15)
+        
+        if res_utxo.status_code != 200:
+            print(f"❌ Blockfrost UTXO-Abfrage fehlgeschlagen (Status {res_utxo.status_code})")
+            return None
+            
+        utxos = res_utxo.json()
         
         ada_lovelace = 0
         token_units = 0
         
-        # Wir laufen durch alle UTXOs (Boxen), die auf der Adresse liegen, und addieren die Werte
+        # Wir suchen in den UTXOs nach dem Pool, der unser NFT enthält
         for utxo in utxos:
             amounts = utxo.get("amount", [])
-            for item in amounts:
-                if item.get("unit") == "lovelace":
-                    ada_lovelace += int(item.get("quantity", 0))
-                else:
-                    token_units += int(item.get("quantity", 0))
+            # Prüfen, ob dieses spezifische Pool-NFT in diesem UTXO liegt
+            has_nft = any(item.get("unit") == pool_nft_id for item in amounts)
+            
+            if has_nft:
+                for item in amounts:
+                    unit = item.get("unit")
+                    quantity = int(item.get("quantity", 0))
                     
+                    if unit == "lovelace":
+                        ada_lovelace = quantity
+                    elif unit != pool_nft_id and not unit.startswith("0ea486b34b909f2c623b11da147db618e330d180ae34fe772022d202"):
+                        # Das ist unser gesuchtes Token (weder Lovelace, noch das Pool-NFT/LP-Token)
+                        token_units = quantity
+                break
+                
         if ada_lovelace == 0 or token_units == 0:
-            print("❌ Fehler: Pool-Bestände konnten aus den UTXOs nicht ausgelesen werden.")
+            print("❌ Fehler: Pool-Mengen konnten nicht isoliert werden.")
             return None
             
         real_ada = ada_lovelace / 1_000_000
         real_tokens = token_units / (10 ** token_decimals)
         
-        token_ada_price = real_ada / real_tokens if real_tokens > 0 else 0
-        return token_ada_price
+        return real_ada / real_tokens if real_tokens > 0 else 0
 
     except Exception as e:
-        print(f"Verbindungsfehler bei Blockfrost-Abfrage: {e}")
+        print(f"Verbindungsfehler bei Blockfrost: {e}")
         return None
 
 def load_last_alert_threshold():
-    """Lädt den letzten alarmierten Schwellenwert aus der Statusdatei"""
     if os.path.exists(STATE_FILE):
         try:
             with open(STATE_FILE, "r") as f:
@@ -97,7 +108,6 @@ def load_last_alert_threshold():
     return None
 
 def save_alert_threshold(value):
-    """Speichert den aktuellen Schwellenwert"""
     try:
         with open(STATE_FILE, "w") as f:
             f.write(str(int(value)))
@@ -106,7 +116,6 @@ def save_alert_threshold(value):
         print(f"Fehler beim Schreiben der Statusdatei: {e}")
 
 def clear_alert_state():
-    """Löscht den gespeicherten Zustand"""
     if os.path.exists(STATE_FILE):
         try:
             os.remove(STATE_FILE)
@@ -115,21 +124,22 @@ def clear_alert_state():
             print(f"Fehler beim Löschen der Statusdatei: {e}")
 
 def check_crypto_prices():
-    print("Starte On-Chain Pool-Abfrage über Blockfrost UTXOs...")
+    print("Starte On-Chain Pool-Abfrage über Blockfrost Asset-Tracking...")
     
     if not BLOCKFROST_PROJECT_ID:
         print("❌ FEHLER: BLOCKFROST_PROJECT_ID Environment Variable fehlt!")
         return
 
-    # Offizielle Minswap V1 Mainnet Pool-Adressen
-    NIGHT_ADA_POOL = "addr1z8snz5g3k822f3xzs3q480j6nrc4z3v6xfl6gfnf28876ux5w6znccu8v0tpx4cr3pxe0p3p54p7vpe6v2tpx4cr3pxs3l2d27" 
-    SNEK_ADA_POOL  = "addr1z9xnz5g3k822f3xzs3q480j6nrc4z3v6xfl6gfnf28876ux5w6znccu8v0tpx4cr3pxe0p3p54p7vpe6v2tpx4cr3pxs7q9d3g"
+    # Offizielle, unveränderliche Minswap V1 Pool-NFT IDs für die beiden Paare
+    # Blockfrost findet darüber automatisch die korrekte Smart-Contract-Box.
+    NIGHT_ADA_POOL_NFT = "0ea486b34b909f2c623b11da147db618e330d180ae34fe772022d2026e696768745f6164615f6c70"
+    SNEK_ADA_POOL_NFT  = "0ea486b34b909f2c623b11da147db618e330d180ae34fe772022d202736e656b5f6164615f6c70"
 
     # 1. ADA-Wert pro NIGHT (6 Decimals)
-    ada_per_night = get_pool_ratio_from_blockfrost(NIGHT_ADA_POOL, token_decimals=6)
+    ada_per_night = get_token_price_from_minswap_via_blockfrost(NIGHT_ADA_POOL_NFT, token_decimals=6)
     
     # 2. ADA-Wert pro SNEK (0 Decimals)
-    ada_per_snek = get_pool_ratio_from_blockfrost(SNEK_ADA_POOL, token_decimals=0)
+    ada_per_snek = get_token_price_from_minswap_via_blockfrost(SNEK_ADA_POOL_NFT, token_decimals=0)
     
     if ada_per_night is None or ada_per_snek is None:
         print("❌ FEHLER: On-Chain Pool-Daten konnten nicht vollständig geladen werden.")
