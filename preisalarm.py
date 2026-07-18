@@ -62,7 +62,7 @@ def check_crypto_prices():
         print(f"Aktuelles Verhältnis: 1 NIGHT = {ratio:.2f} SNEK")
         
         # Alarm-Grenzwerte prüfen
-        if ratio < 80 or ratio > 100:
+        if ratio < 95 or ratio > 100:
             msg = f"⚠️ Krypto-Alarm! Das Verhältnis liegt aktuell bei 1 NIGHT = {ratio:.2f} SNEK!"
             send_push_notification(msg)
         else:
