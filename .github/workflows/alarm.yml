@@ -1,4 +1,4 @@
-name: Krypto Preisalarm Cronjob
+name: Krypto Preisalarm
 
 on:
   schedule:
