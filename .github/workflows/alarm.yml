@@ -2,32 +2,46 @@ name: Krypto Alarm Cronjob
 
 on:
   schedule:
-    # Läuft alle 15 Minuten rund um die Uhr
+    # Läuft exakt alle 15 Minuten rund um die Uhr
     - cron: '*/5 * * * *'
-  workflow_dispatch: # Ermöglicht es dir, das Skript jederzeit manuell per Klick zu testen
+  workflow_dispatch: # Ermöglicht es dir, das Skript jederzeit manuell in GitHub zu starten
+
+permissions:
+  contents: write # Ganz wichtig: Gibt GitHub die Erlaubnis, die alarm_state.txt zu speichern
 
 jobs:
-  run-script:
+  run-price-alert:
     runs-on: ubuntu-latest
+
     steps:
-      - name: Code auschecken
-        uses: actions/checkout@v4
+    - name: Code auschecken
+      uses: actions/checkout@v4
+      with:
+        persist-credentials: true
 
-      - name: Python einrichten
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.10'
+    - name: Python einrichten
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.10'
 
-      - name: Abhaengigkeiten installieren
-        run: |
-          python -m pip install --upgrade pip
-          pip install requests
+    - name: Abhängigkeiten installieren
+      run: |
+        python -m pip install --upgrade pip
+        pip install requests
 
-      - name: Skript ausfuehren
-        env:
-          # Diese Namen müssen exakt mit os.environ.get() im Python-Code übereinstimmen
-          BLOCKFROST_PROJECT_ID: ${{ secrets.BLOCKFROST_PROJECT_ID }}
-          PUSHOVER_USER_KEY: ${{ secrets.PUSHOVER_USER_KEY }}
-          PUSHOVER_API_TOKEN: ${{ secrets.PUSHOVER_API_TOKEN }}
-        # Das "-u" sorgt dafür, dass die Textausgabe sofort im Live-Log erscheint
-        run: python -u preisalarm.py
+    - name: Preisalarm Skript ausführen
+      env:
+        PUSHOVER_USER_KEY: ${{ secrets.PUSHOVER_USER_KEY }}
+        PUSHOVER_API_TOKEN: ${{ secrets.PUSHOVER_API_TOKEN }}
+      run: python preisalarm.py
+
+    - name: Speicher Zustand fuer das naechste Mal
+      run: |
+        git config --local user.email "action@github.com"
+        git config --local user.name "GitHub Action"
+        # Fügt die Datei hinzu, falls sie erstellt oder geändert wurde
+        git add alarm_state.txt || true
+        # Falls die Datei gelöscht wurde (Normalbereich), wird das auch vorgemerkt
+        git rm alarm_state.txt || true 
+        git commit -m "Update alarm state [skip ci]" || true
+        git push || true
