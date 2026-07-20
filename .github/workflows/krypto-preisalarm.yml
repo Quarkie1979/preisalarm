@@ -3,7 +3,7 @@ name: Krypto Preisalarm
 on:
   schedule:
     # Versucht alle 15 Minuten zu starten (kann bei GitHub Actions variieren)
-    - cron: '*/15 * * * *'
+    - cron: '*/120 * * * *'
   workflow_dispatch: # Ermöglicht es dir, das Skript jederzeit manuell in GitHub zu starten
 
 permissions:
