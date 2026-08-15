@@ -4,7 +4,7 @@ import requests
 
 # --- CONFIGURATION ---
 STATE_FILE = "alarm_state.txt"
-UNTERE_GRENZE = 55
+UNTERE_GRENZE = 52
 OBERE_GRENZE = 100
 
 # NIGHT-SNEK Pool auf Minswap (LP Policy-ID + LP Token-Name zusammengesetzt)
