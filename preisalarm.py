@@ -4,7 +4,7 @@ import requests
 
 # --- CONFIGURATION ---
 STATE_FILE = "alarm_state.txt"
-UNTERE_GRENZE = 52
+UNTERE_GRENZE = 2
 OBERE_GRENZE = 62
 NIGHT_PROZENT = 2  # Mindest-Preisanstieg in % für den $NIGHT-Preisalarm
 
