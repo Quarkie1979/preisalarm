@@ -1,5 +1,6 @@
 import os
 import sys
+import time
 import requests
 
 # --- CONFIGURATION ---
@@ -27,6 +28,13 @@ ADA_USDM_API_URL = f"https://api-mainnet-prod.minswap.org/v1/pools/{ADA_USDM_POO
 # --- GITHUB SECRETS AUSLESEN ---
 PUSHOVER_USER_KEY = os.environ.get("PUSHOVER_USER_KEY")
 PUSHOVER_API_TOKEN = os.environ.get("PUSHOVER_API_TOKEN")
+
+# Gemeinsame HTTP-Header gegen Server-/Cloudflare-Caching
+REQUEST_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+    "Cache-Control": "no-cache, no-store, must-revalidate",
+    "Pragma": "no-cache"
+}
 
 
 def send_push_notification(message):
@@ -83,7 +91,9 @@ def clear_alert_state():
 def get_night_snek_ratio():
     """Fragt den NIGHT-SNEK-Pool bei Minswap ab und berechnet das Verhältnis 1 NIGHT = X SNEK."""
     print("Rufe Pool-Daten von der Minswap API ab...")
-    response = requests.get(MINSWAP_API_URL, timeout=10)
+    # Cache-Busting per Timestamp erzwingt immer einen frischen Request
+    params = {"_t": int(time.time())}
+    response = requests.get(MINSWAP_API_URL, headers=REQUEST_HEADERS, params=params, timeout=10)
 
     if response.status_code != 200:
         raise RuntimeError(f"API-Fehler {response.status_code}: {response.text}")
@@ -155,7 +165,8 @@ def check_crypto_prices():
 def get_night_ada_ratio():
     """Fragt den NIGHT/ADA-Pool bei Minswap ab und liefert: 1 NIGHT = X ADA."""
     print("Rufe NIGHT/ADA-Pool-Daten von der Minswap API ab...")
-    response = requests.get(NIGHT_ADA_API_URL, timeout=10)
+    params = {"_t": int(time.time())}
+    response = requests.get(NIGHT_ADA_API_URL, headers=REQUEST_HEADERS, params=params, timeout=10)
 
     if response.status_code != 200:
         raise RuntimeError(f"API-Fehler {response.status_code}: {response.text}")
@@ -183,7 +194,8 @@ def get_night_ada_ratio():
 def get_ada_usdm_ratio():
     """Fragt den ADA/USDM-Pool bei Minswap ab und liefert: 1 ADA = X USDM (≈ USD)."""
     print("Rufe ADA/USDM-Pool-Daten von der Minswap API ab...")
-    response = requests.get(ADA_USDM_API_URL, timeout=10)
+    params = {"_t": int(time.time())}
+    response = requests.get(ADA_USDM_API_URL, headers=REQUEST_HEADERS, params=params, timeout=10)
 
     if response.status_code != 200:
         raise RuntimeError(f"API-Fehler {response.status_code}: {response.text}")
@@ -251,12 +263,6 @@ def save_night_price(value):
 def check_night_price():
     """
     Ruft den aktuellen $NIGHT-Preis ab und vergleicht ihn mit dem gespeicherten Referenzwert.
-
-    - Datei existiert noch nicht  -> wird angelegt, aktueller Preis wird gespeichert, keine Push.
-    - Preis >= NIGHT_PROZENT höher als gespeichert -> Push wird gesendet, neuer (höherer)
-      Preis wird gespeichert.
-    - Preis liegt weniger als NIGHT_PROZENT höher -> keine Push, Datei bleibt unverändert.
-    - Preis liegt tiefer oder gleich -> keine Push, Datei bleibt unverändert.
     """
     print("Starte $NIGHT-Preisabfrage via Minswap API (NIGHT/ADA * ADA/USDM)...")
 
