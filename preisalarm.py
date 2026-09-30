@@ -1,6 +1,5 @@
 import os
 import sys
-import time
 import requests
 
 # --- CONFIGURATION ---
@@ -9,25 +8,25 @@ UNTERE_GRENZE = 3
 OBERE_GRENZE = 62
 NIGHT_PROZENT = 2  # Mindest-Preisanstieg in % für den $NIGHT-Preisalarm
 
-# NIGHT-SNEK Pool auf Minswap
+# NIGHT-SNEK Pool auf Minswap (LP Policy-ID + LP Token-Name zusammengesetzt)
 POOL_ID = "f5808c2c990d86da54bfc97d89cee6efa20cd8461616359478d96b4c3b3318a251bb71f8345c5affcd29645af2f56859eea740bec2a27c91027cb01d"
 MINSWAP_API_URL = f"https://api-mainnet-prod.minswap.org/v1/pools/{POOL_ID}/metrics"
 
+# $NIGHT-Preis-Ermittlung über zwei liquidere Pools statt dem dünnen NIGHT/USDM-Pool:
+# 1 NIGHT in USD = (NIGHT/ADA-Kurs) * (ADA/USDM-Kurs)
 NIGHT_PREIS_STATE_FILE = "nightpreis.txt"
 
-# NIGHT-ADA Pool auf Minswap (mit USD-Währungsparameter)
+# NIGHT-ADA Pool auf Minswap (deutlich mehr Liquidität als NIGHT/USDM)
 NIGHT_ADA_POOL_ID = "f5808c2c990d86da54bfc97d89cee6efa20cd8461616359478d96b4ce74c52975908a612d5ce68327040d449aae99f8b463bb6de046a1b23c5713169"
-NIGHT_ADA_API_URL = f"https://api-mainnet-prod.minswap.org/v1/pools/{NIGHT_ADA_POOL_ID}/metrics?currency=usd"
+NIGHT_ADA_API_URL = f"https://api-mainnet-prod.minswap.org/v1/pools/{NIGHT_ADA_POOL_ID}/metrics"
+
+# ADA-USDM Pool auf Minswap (liefert den USD-Kurs von 1 ADA)
+ADA_USDM_POOL_ID = "f5808c2c990d86da54bfc97d89cee6efa20cd8461616359478d96b4c7dd6988c5a86693c76aeec1ea94afa41770be0de21a775ca7a2a1eabdb6a0171"
+ADA_USDM_API_URL = f"https://api-mainnet-prod.minswap.org/v1/pools/{ADA_USDM_POOL_ID}/metrics"
 
 # --- GITHUB SECRETS AUSLESEN ---
 PUSHOVER_USER_KEY = os.environ.get("PUSHOVER_USER_KEY")
 PUSHOVER_API_TOKEN = os.environ.get("PUSHOVER_API_TOKEN")
-
-REQUEST_HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-    "Accept": "application/json",
-    "Cache-Control": "no-cache"
-}
 
 
 def send_push_notification(message):
@@ -49,6 +48,7 @@ def send_push_notification(message):
 
 
 def load_last_alert_threshold():
+    """Lädt den letzten alarmierten Schwellenwert aus der Datei"""
     if os.path.exists(STATE_FILE):
         try:
             with open(STATE_FILE, "r") as f:
@@ -61,6 +61,7 @@ def load_last_alert_threshold():
 
 
 def save_alert_threshold(value):
+    """Speichert den aktuellen Schwellenwert"""
     try:
         with open(STATE_FILE, "w") as f:
             f.write(str(int(value)))
@@ -70,6 +71,7 @@ def save_alert_threshold(value):
 
 
 def clear_alert_state():
+    """Löscht den Zustand, wenn der Kurs wieder im Normalbereich ist"""
     if os.path.exists(STATE_FILE):
         try:
             os.remove(STATE_FILE)
@@ -80,13 +82,14 @@ def clear_alert_state():
 
 def get_night_snek_ratio():
     """Fragt den NIGHT-SNEK-Pool bei Minswap ab und berechnet das Verhältnis 1 NIGHT = X SNEK."""
-    print("Rufe NIGHT/SNEK Pool-Daten von der Minswap API ab...")
-    response = requests.get(MINSWAP_API_URL, headers=REQUEST_HEADERS, timeout=10)
+    print("Rufe Pool-Daten von der Minswap API ab...")
+    response = requests.get(MINSWAP_API_URL, timeout=10)
 
     if response.status_code != 200:
         raise RuntimeError(f"API-Fehler {response.status_code}: {response.text}")
 
     data = response.json()
+
     asset_a_ticker = data["asset_a"]["metadata"]["ticker"]
     asset_b_ticker = data["asset_b"]["metadata"]["ticker"]
     liquidity_a = data["liquidity_a"]
@@ -99,19 +102,25 @@ def get_night_snek_ratio():
     elif asset_a_ticker == "SNEK" and asset_b_ticker == "NIGHT":
         return liquidity_a / liquidity_b
     else:
-        raise RuntimeError(f"Unerwartete Zusammensetzung: {asset_a_ticker}/{asset_b_ticker}")
+        raise RuntimeError(
+            f"Unerwartete Pool-Zusammensetzung: {asset_a_ticker}/{asset_b_ticker} "
+            f"(erwartet: NIGHT/SNEK). Pool-ID prüfen!"
+        )
 
 
 def check_crypto_prices():
     print("Starte Preisabfrage via Minswap API...")
+
     try:
         ratio = get_night_snek_ratio()
         print(f"Aktuelles Verhältnis: 1 NIGHT = {ratio:.2f} SNEK")
 
+        # Für das Gedächtnis nutzen wir die Ganzzahl des Verhältnisses
         int_ratio = int(ratio)
         last_alerted = load_last_alert_threshold()
         print(f"Zuletzt alarmierter Wert im Speicher: {last_alerted}")
 
+        # Logik für OBERHALB der Grenze
         if int_ratio > OBERE_GRENZE:
             if last_alerted is None or int_ratio > last_alerted:
                 msg = f"📈 Krypto-Alarm (Steigt)! Verhältnis bei 1 NIGHT = {ratio:.2f} SNEK!"
@@ -120,6 +129,7 @@ def check_crypto_prices():
             else:
                 print(f"Verhältnis ({int_ratio}) ist nicht höher als der letzte Alarm ({last_alerted}). Kein Spam.")
 
+        # Logik für UNTERHALB der Grenze
         elif int_ratio < UNTERE_GRENZE:
             if last_alerted is None or int_ratio < last_alerted:
                 msg = f"📉 Krypto-Alarm (Fällt)! Verhältnis bei 1 NIGHT = {ratio:.2f} SNEK!"
@@ -128,6 +138,7 @@ def check_crypto_prices():
             else:
                 print(f"Verhältnis ({int_ratio}) ist nicht tiefer als der letzte Alarm ({last_alerted}). Kein Spam.")
 
+        # Normalbereich (zwischen den Grenzen)
         else:
             print("Verhältnis im Normalbereich. Kein Alarm gesendet.")
             if last_alerted is not None:
@@ -138,58 +149,84 @@ def check_crypto_prices():
 
 
 # =====================================================================
-# LIVE $NIGHT USD-PREISABFRAGE
+# NEUE, UNABHÄNGIGE FUNKTION: $NIGHT USD-Preisalarm
 # =====================================================================
+
+def get_night_ada_ratio():
+    """Fragt den NIGHT/ADA-Pool bei Minswap ab und liefert: 1 NIGHT = X ADA."""
+    print("Rufe NIGHT/ADA-Pool-Daten von der Minswap API ab...")
+    response = requests.get(NIGHT_ADA_API_URL, timeout=10)
+
+    if response.status_code != 200:
+        raise RuntimeError(f"API-Fehler {response.status_code}: {response.text}")
+
+    data = response.json()
+
+    asset_a_ticker = data["asset_a"]["metadata"]["ticker"]
+    asset_b_ticker = data["asset_b"]["metadata"]["ticker"]
+    liquidity_a = data["liquidity_a"]
+    liquidity_b = data["liquidity_b"]
+
+    print(f"Pool-Zusammensetzung: {asset_a_ticker} ({liquidity_a}) / {asset_b_ticker} ({liquidity_b})")
+
+    if asset_a_ticker == "NIGHT" and asset_b_ticker == "ADA":
+        return liquidity_b / liquidity_a
+    elif asset_a_ticker == "ADA" and asset_b_ticker == "NIGHT":
+        return liquidity_a / liquidity_b
+    else:
+        raise RuntimeError(
+            f"Unerwartete Pool-Zusammensetzung: {asset_a_ticker}/{asset_b_ticker} "
+            f"(erwartet: NIGHT/ADA). Pool-ID prüfen!"
+        )
+
+
+def get_ada_usdm_ratio():
+    """Fragt den ADA/USDM-Pool bei Minswap ab und liefert: 1 ADA = X USDM (≈ USD)."""
+    print("Rufe ADA/USDM-Pool-Daten von der Minswap API ab...")
+    response = requests.get(ADA_USDM_API_URL, timeout=10)
+
+    if response.status_code != 200:
+        raise RuntimeError(f"API-Fehler {response.status_code}: {response.text}")
+
+    data = response.json()
+
+    asset_a_ticker = data["asset_a"]["metadata"]["ticker"]
+    asset_b_ticker = data["asset_b"]["metadata"]["ticker"]
+    liquidity_a = data["liquidity_a"]
+    liquidity_b = data["liquidity_b"]
+
+    print(f"Pool-Zusammensetzung: {asset_a_ticker} ({liquidity_a}) / {asset_b_ticker} ({liquidity_b})")
+
+    if asset_a_ticker == "ADA" and asset_b_ticker == "USDM":
+        return liquidity_b / liquidity_a
+    elif asset_a_ticker == "USDM" and asset_b_ticker == "ADA":
+        return liquidity_a / liquidity_b
+    else:
+        raise RuntimeError(
+            f"Unerwartete Pool-Zusammensetzung: {asset_a_ticker}/{asset_b_ticker} "
+            f"(erwartet: ADA/USDM). Pool-ID prüfen!"
+        )
+
 
 def get_night_usd_price():
     """
-    Holt den offiziellen Live-Preis für NIGHT direkt von Minswap.
-    Weg 1: Minswap Asset-Index (wie auf minswap.org angezeigt)
-    Weg 2 (Fallback): NIGHT/ADA Pool mit Währungsumrechnung in USD
+    Berechnet den USD-Preis von 1 $NIGHT über zwei liquidere Pools statt eines
+    direkten (aber dünnen) NIGHT/USDM-Pools:
+
+        1 NIGHT in USD = (NIGHT/ADA-Kurs) * (ADA/USDM-Kurs)
     """
-    # Weg 1: Offizieller Minswap Asset-Katalog
-    try:
-        url = "https://api-mainnet-prod.minswap.org/v1/assets?term=NIGHT&limit=10"
-        res = requests.get(url, headers=REQUEST_HEADERS, timeout=8)
-        if res.status_code == 200:
-            assets = res.json().get("assets", [])
-            for item in assets:
-                meta = item.get("metadata") or {}
-                if meta.get("ticker") == "NIGHT" and item.get("price"):
-                    price_usd = float(item["price"])
-                    print(f"Live $NIGHT-Preis direkt von Minswap Asset-Index: ${price_usd:.6f}")
-                    return price_usd
-    except Exception as e:
-        print(f"Asset-Index Abfrage übersprungen: {e}")
+    night_in_ada = get_night_ada_ratio()
+    ada_in_usd = get_ada_usdm_ratio()
+    night_in_usd = night_in_ada * ada_in_usd
 
-    # Weg 2: NIGHT/ADA Pool mit expliziter USD-Bewertung
-    print("Rufe NIGHT/ADA Pool-Daten mit Währung USD ab...")
-    res = requests.get(NIGHT_ADA_API_URL, headers=REQUEST_HEADERS, timeout=8)
-    if res.status_code == 200:
-        data = res.json()
-        # Bei currency=usd liefert Minswap die Tokenwerte direkt in USD
-        asset_a = data.get("asset_a", {})
-        ticker_a = (asset_a.get("metadata") or {}).get("ticker")
-        
-        # Minswap liefert den Tokenpreis direkt im Pool-Metrics-Objekt
-        if "price" in data and data["price"]:
-            price = float(data["price"])
-            print(f"Pool-Spotpreis (USD): ${price:.6f}")
-            return price
+    print(f"1 NIGHT = {night_in_ada:.6f} ADA, 1 ADA = {ada_in_usd:.4f} USD "
+          f"=> 1 NIGHT = ${night_in_usd:.6f}")
 
-        # Fallback: USD-Liquidität geteilt durch Token-Menge
-        liq_total = data.get("liquidity_raw", 0)
-        liq_night = data.get("liquidity_a" if ticker_a == "NIGHT" else "liquidity_b", 0)
-        if liq_total > 0 and liq_night > 0:
-            # Im Pool entspricht die Hälfte des TVL dem NIGHT-Wert
-            price_usd = (liq_total / 2.0) / liq_night
-            print(f"Berechneter Pool-USD-Preis: ${price_usd:.6f}")
-            return price_usd
-
-    raise RuntimeError("Konnte den NIGHT USD-Preis über keinen Minswap-Endpunkt ermitteln.")
+    return night_in_usd
 
 
 def load_last_night_price():
+    """Lädt den zuletzt gespeicherten $NIGHT-Preis aus der Datei. None, wenn die Datei nicht existiert."""
     if os.path.exists(NIGHT_PREIS_STATE_FILE):
         try:
             with open(NIGHT_PREIS_STATE_FILE, "r") as f:
@@ -202,6 +239,7 @@ def load_last_night_price():
 
 
 def save_night_price(value):
+    """Speichert den aktuellen $NIGHT-Preis als neuen Referenzwert."""
     try:
         with open(NIGHT_PREIS_STATE_FILE, "w") as f:
             f.write(str(value))
@@ -211,18 +249,30 @@ def save_night_price(value):
 
 
 def check_night_price():
-    print("Starte $NIGHT-Preisabfrage via Minswap...")
+    """
+    Ruft den aktuellen $NIGHT-Preis ab und vergleicht ihn mit dem gespeicherten Referenzwert.
+
+    - Datei existiert noch nicht  -> wird angelegt, aktueller Preis wird gespeichert, keine Push.
+    - Preis >= NIGHT_PROZENT höher als gespeichert -> Push wird gesendet, neuer (höherer)
+      Preis wird gespeichert.
+    - Preis liegt weniger als NIGHT_PROZENT höher -> keine Push, Datei bleibt unverändert.
+    - Preis liegt tiefer oder gleich -> keine Push, Datei bleibt unverändert.
+    """
+    print("Starte $NIGHT-Preisabfrage via Minswap API (NIGHT/ADA * ADA/USDM)...")
+
     try:
         aktueller_preis = get_night_usd_price()
         print(f"Aktueller $NIGHT-Preis: ${aktueller_preis:.6f}")
 
         letzter_preis = load_last_night_price()
+
         if letzter_preis is None:
             print("Noch kein Referenzwert vorhanden. Lege nightpreis.txt neu an.")
             save_night_price(aktueller_preis)
             return
 
         print(f"Gespeicherter Referenzpreis: ${letzter_preis:.6f}")
+
         veraenderung_prozent = ((aktueller_preis - letzter_preis) / letzter_preis) * 100
 
         if veraenderung_prozent >= NIGHT_PROZENT:
