@@ -9,29 +9,31 @@ UNTERE_GRENZE = 3
 OBERE_GRENZE = 62
 NIGHT_PROZENT = 2  # Mindest-Preisanstieg in % für den $NIGHT-Preisalarm
 
-# NIGHT-SNEK Pool auf Minswap (LP Policy-ID + LP Token-Name zusammengesetzt)
+# NIGHT-SNEK Pool auf Minswap (LP Policy-ID + LP Token-Name)
 POOL_ID = "f5808c2c990d86da54bfc97d89cee6efa20cd8461616359478d96b4c3b3318a251bb71f8345c5affcd29645af2f56859eea740bec2a27c91027cb01d"
-MINSWAP_API_URL = f"https://api-mainnet-prod.minswap.org/v1/pools/{POOL_ID}/metrics"
+# WICHTIG: Kein "/metrics" am Ende, damit die Live-Reserven geliefert werden!
+MINSWAP_API_URL = f"https://api-mainnet-prod.minswap.org/v1/pools/{POOL_ID}"
 
-# $NIGHT-Preis-Ermittlung über zwei liquidere Pools statt dem dünnen NIGHT/USDM-Pool:
+# $NIGHT-Preis-Ermittlung über zwei liquidere Pools statt des dünnen NIGHT/USDM-Pools:
 # 1 NIGHT in USD = (NIGHT/ADA-Kurs) * (ADA/USDM-Kurs)
 NIGHT_PREIS_STATE_FILE = "nightpreis.txt"
 
-# NIGHT-ADA Pool auf Minswap (deutlich mehr Liquidität als NIGHT/USDM)
+# NIGHT-ADA Pool auf Minswap
 NIGHT_ADA_POOL_ID = "f5808c2c990d86da54bfc97d89cee6efa20cd8461616359478d96b4ce74c52975908a612d5ce68327040d449aae99f8b463bb6de046a1b23c5713169"
-NIGHT_ADA_API_URL = f"https://api-mainnet-prod.minswap.org/v1/pools/{NIGHT_ADA_POOL_ID}/metrics"
+NIGHT_ADA_API_URL = f"https://api-mainnet-prod.minswap.org/v1/pools/{NIGHT_ADA_POOL_ID}"
 
-# ADA-USDM Pool auf Minswap (liefert den USD-Kurs von 1 ADA)
+# ADA-USDM Pool auf Minswap
 ADA_USDM_POOL_ID = "f5808c2c990d86da54bfc97d89cee6efa20cd8461616359478d96b4c7dd6988c5a86693c76aeec1ea94afa41770be0de21a775ca7a2a1eabdb6a0171"
-ADA_USDM_API_URL = f"https://api-mainnet-prod.minswap.org/v1/pools/{ADA_USDM_POOL_ID}/metrics"
+ADA_USDM_API_URL = f"https://api-mainnet-prod.minswap.org/v1/pools/{ADA_USDM_POOL_ID}"
 
 # --- GITHUB SECRETS AUSLESEN ---
 PUSHOVER_USER_KEY = os.environ.get("PUSHOVER_USER_KEY")
 PUSHOVER_API_TOKEN = os.environ.get("PUSHOVER_API_TOKEN")
 
-# Gemeinsame HTTP-Header gegen Server-/Cloudflare-Caching
+# HTTP-Header zur Vermeidung von CDN-/Proxy-Caching
 REQUEST_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+    "Accept": "application/json",
     "Cache-Control": "no-cache, no-store, must-revalidate",
     "Pragma": "no-cache"
 }
@@ -88,10 +90,39 @@ def clear_alert_state():
             print(f"Fehler beim Löschen der Statusdatei: {e}")
 
 
+def extract_pool_data(data):
+    """
+    Parst flexibel sowohl das direkte Pool-Objekt als auch ein geschachteltes Metrics-Objekt
+    und berücksichtigt die korrekten Dezimalstellen.
+    """
+    asset_a = data.get("asset_a", {})
+    asset_b = data.get("asset_b", {})
+
+    meta_a = asset_a.get("metadata") or {}
+    meta_b = asset_b.get("metadata") or {}
+
+    ticker_a = meta_a.get("ticker") or ("ADA" if asset_a.get("currency_symbol") == "" else "TOKEN_A")
+    ticker_b = meta_b.get("ticker") or ("ADA" if asset_b.get("currency_symbol") == "" else "TOKEN_B")
+
+    decimals_a = int(meta_a.get("decimals", 6 if ticker_a == "ADA" else 0))
+    decimals_b = int(meta_b.get("decimals", 6 if ticker_b == "ADA" else 0))
+
+    # Unterstützt sowohl die Felder des direkten Pool-Endpunkts (quantity) als auch von metrics (liquidity)
+    qty_a = float(data.get("quantity_a") or data.get("reserve_a") or data.get("liquidity_a") or 0)
+    qty_b = float(data.get("quantity_b") or data.get("reserve_b") or data.get("liquidity_b") or 0)
+
+    # Falls Rohmengen (Integer) vorliegen, auf Dezimalstellen skalieren
+    if "liquidity_a" not in data and decimals_a > 0:
+        qty_a = qty_a / (10 ** decimals_a)
+    if "liquidity_b" not in data and decimals_b > 0:
+        qty_b = qty_b / (10 ** decimals_b)
+
+    return ticker_a, ticker_b, qty_a, qty_b
+
+
 def get_night_snek_ratio():
     """Fragt den NIGHT-SNEK-Pool bei Minswap ab und berechnet das Verhältnis 1 NIGHT = X SNEK."""
     print("Rufe Pool-Daten von der Minswap API ab...")
-    # Cache-Busting per Timestamp erzwingt immer einen frischen Request
     params = {"_t": int(time.time())}
     response = requests.get(MINSWAP_API_URL, headers=REQUEST_HEADERS, params=params, timeout=10)
 
@@ -99,21 +130,18 @@ def get_night_snek_ratio():
         raise RuntimeError(f"API-Fehler {response.status_code}: {response.text}")
 
     data = response.json()
+    ticker_a, ticker_b, qty_a, qty_b = extract_pool_data(data)
 
-    asset_a_ticker = data["asset_a"]["metadata"]["ticker"]
-    asset_b_ticker = data["asset_b"]["metadata"]["ticker"]
-    liquidity_a = data["liquidity_a"]
-    liquidity_b = data["liquidity_b"]
+    print(f"Pool-Zusammensetzung: {ticker_a} ({qty_a:.4f}) / {ticker_b} ({qty_b:.4f})")
 
-    print(f"Pool-Zusammensetzung: {asset_a_ticker} ({liquidity_a}) / {asset_b_ticker} ({liquidity_b})")
-
-    if asset_a_ticker == "NIGHT" and asset_b_ticker == "SNEK":
-        return liquidity_b / liquidity_a
-    elif asset_a_ticker == "SNEK" and asset_b_ticker == "NIGHT":
-        return liquidity_a / liquidity_b
+    if ticker_a == "NIGHT" and ticker_b == "SNEK":
+        return qty_b / qty_a
+    elif ticker_a == "SNEK" and ticker_b == "NIGHT":
+        return qty_a / qty_b
     else:
+        # Fallback falls Ticker anders formatiert ist: Positionen anhand der Reserven prüfen
         raise RuntimeError(
-            f"Unerwartete Pool-Zusammensetzung: {asset_a_ticker}/{asset_b_ticker} "
+            f"Unerwartete Pool-Zusammensetzung: {ticker_a}/{ticker_b} "
             f"(erwartet: NIGHT/SNEK). Pool-ID prüfen!"
         )
 
@@ -125,12 +153,11 @@ def check_crypto_prices():
         ratio = get_night_snek_ratio()
         print(f"Aktuelles Verhältnis: 1 NIGHT = {ratio:.2f} SNEK")
 
-        # Für das Gedächtnis nutzen wir die Ganzzahl des Verhältnisses
         int_ratio = int(ratio)
         last_alerted = load_last_alert_threshold()
         print(f"Zuletzt alarmierter Wert im Speicher: {last_alerted}")
 
-        # Logik für OBERHALB der Grenze
+        # OBERHALB der Grenze
         if int_ratio > OBERE_GRENZE:
             if last_alerted is None or int_ratio > last_alerted:
                 msg = f"📈 Krypto-Alarm (Steigt)! Verhältnis bei 1 NIGHT = {ratio:.2f} SNEK!"
@@ -139,7 +166,7 @@ def check_crypto_prices():
             else:
                 print(f"Verhältnis ({int_ratio}) ist nicht höher als der letzte Alarm ({last_alerted}). Kein Spam.")
 
-        # Logik für UNTERHALB der Grenze
+        # UNTERHALB der Grenze
         elif int_ratio < UNTERE_GRENZE:
             if last_alerted is None or int_ratio < last_alerted:
                 msg = f"📉 Krypto-Alarm (Fällt)! Verhältnis bei 1 NIGHT = {ratio:.2f} SNEK!"
@@ -148,7 +175,7 @@ def check_crypto_prices():
             else:
                 print(f"Verhältnis ({int_ratio}) ist nicht tiefer als der letzte Alarm ({last_alerted}). Kein Spam.")
 
-        # Normalbereich (zwischen den Grenzen)
+        # Normalbereich
         else:
             print("Verhältnis im Normalbereich. Kein Alarm gesendet.")
             if last_alerted is not None:
@@ -157,10 +184,6 @@ def check_crypto_prices():
     except Exception as e:
         print(f"Fehler bei der API-Abfrage: {e}")
 
-
-# =====================================================================
-# NEUE, UNABHÄNGIGE FUNKTION: $NIGHT USD-Preisalarm
-# =====================================================================
 
 def get_night_ada_ratio():
     """Fragt den NIGHT/ADA-Pool bei Minswap ab und liefert: 1 NIGHT = X ADA."""
@@ -172,21 +195,17 @@ def get_night_ada_ratio():
         raise RuntimeError(f"API-Fehler {response.status_code}: {response.text}")
 
     data = response.json()
+    ticker_a, ticker_b, qty_a, qty_b = extract_pool_data(data)
 
-    asset_a_ticker = data["asset_a"]["metadata"]["ticker"]
-    asset_b_ticker = data["asset_b"]["metadata"]["ticker"]
-    liquidity_a = data["liquidity_a"]
-    liquidity_b = data["liquidity_b"]
+    print(f"Pool-Zusammensetzung: {ticker_a} ({qty_a:.4f}) / {ticker_b} ({qty_b:.4f})")
 
-    print(f"Pool-Zusammensetzung: {asset_a_ticker} ({liquidity_a}) / {asset_b_ticker} ({liquidity_b})")
-
-    if asset_a_ticker == "NIGHT" and asset_b_ticker == "ADA":
-        return liquidity_b / liquidity_a
-    elif asset_a_ticker == "ADA" and asset_b_ticker == "NIGHT":
-        return liquidity_a / liquidity_b
+    if ticker_a == "NIGHT" and ticker_b == "ADA":
+        return qty_b / qty_a
+    elif ticker_a == "ADA" and ticker_b == "NIGHT":
+        return qty_a / qty_b
     else:
         raise RuntimeError(
-            f"Unerwartete Pool-Zusammensetzung: {asset_a_ticker}/{asset_b_ticker} "
+            f"Unerwartete Pool-Zusammensetzung: {ticker_a}/{ticker_b} "
             f"(erwartet: NIGHT/ADA). Pool-ID prüfen!"
         )
 
@@ -201,31 +220,25 @@ def get_ada_usdm_ratio():
         raise RuntimeError(f"API-Fehler {response.status_code}: {response.text}")
 
     data = response.json()
+    ticker_a, ticker_b, qty_a, qty_b = extract_pool_data(data)
 
-    asset_a_ticker = data["asset_a"]["metadata"]["ticker"]
-    asset_b_ticker = data["asset_b"]["metadata"]["ticker"]
-    liquidity_a = data["liquidity_a"]
-    liquidity_b = data["liquidity_b"]
+    print(f"Pool-Zusammensetzung: {ticker_a} ({qty_a:.4f}) / {ticker_b} ({qty_b:.4f})")
 
-    print(f"Pool-Zusammensetzung: {asset_a_ticker} ({liquidity_a}) / {asset_b_ticker} ({liquidity_b})")
-
-    if asset_a_ticker == "ADA" and asset_b_ticker == "USDM":
-        return liquidity_b / liquidity_a
-    elif asset_a_ticker == "USDM" and asset_b_ticker == "ADA":
-        return liquidity_a / liquidity_b
+    if ticker_a == "ADA" and ticker_b == "USDM":
+        return qty_b / qty_a
+    elif ticker_a == "USDM" and ticker_b == "ADA":
+        return qty_a / qty_b
     else:
         raise RuntimeError(
-            f"Unerwartete Pool-Zusammensetzung: {asset_a_ticker}/{asset_b_ticker} "
+            f"Unerwartete Pool-Zusammensetzung: {ticker_a}/{ticker_b} "
             f"(erwartet: ADA/USDM). Pool-ID prüfen!"
         )
 
 
 def get_night_usd_price():
     """
-    Berechnet den USD-Preis von 1 $NIGHT über zwei liquidere Pools statt eines
-    direkten (aber dünnen) NIGHT/USDM-Pools:
-
-        1 NIGHT in USD = (NIGHT/ADA-Kurs) * (ADA/USDM-Kurs)
+    Berechnet den USD-Preis von 1 $NIGHT:
+    1 NIGHT in USD = (NIGHT/ADA-Kurs) * (ADA/USDM-Kurs)
     """
     night_in_ada = get_night_ada_ratio()
     ada_in_usd = get_ada_usdm_ratio()
@@ -238,7 +251,7 @@ def get_night_usd_price():
 
 
 def load_last_night_price():
-    """Lädt den zuletzt gespeicherten $NIGHT-Preis aus der Datei. None, wenn die Datei nicht existiert."""
+    """Lädt den zuletzt gespeicherten $NIGHT-Preis aus der Datei. None, wenn nicht vorhanden."""
     if os.path.exists(NIGHT_PREIS_STATE_FILE):
         try:
             with open(NIGHT_PREIS_STATE_FILE, "r") as f:
@@ -261,9 +274,7 @@ def save_night_price(value):
 
 
 def check_night_price():
-    """
-    Ruft den aktuellen $NIGHT-Preis ab und vergleicht ihn mit dem gespeicherten Referenzwert.
-    """
+    """Prüft den $NIGHT-Preis und alarmiert bei Anstieg >= NIGHT_PROZENT."""
     print("Starte $NIGHT-Preisabfrage via Minswap API (NIGHT/ADA * ADA/USDM)...")
 
     try:
