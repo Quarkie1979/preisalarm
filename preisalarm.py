@@ -210,8 +210,7 @@ def check_night_price():
     - Datei existiert noch nicht        -> Preis wird als Referenz gespeichert, keine Push.
     - Preis >= NIGHT_PROZENT höher      -> Push, neuer (höherer) Preis wird Referenz.
     - Preis weniger als NIGHT_PROZENT höher -> keine Push, Referenz bleibt.
-    - Preis tiefer oder gleich          -> keine Push, Referenz wird auf den neuen
-                                           Tiefstand nachgezogen.
+    - Preis tiefer oder gleich          -> keine Push, Referenz bleibt unverändert.
     """
     print("Starte $NIGHT-Preisabfrage via Minswap API...")
 
@@ -245,9 +244,8 @@ def check_night_price():
         else:
             print(
                 f"Preis ist gefallen oder gleich geblieben ({veraenderung_prozent:.2f}%). "
-                f"Referenzwert wird auf den neuen Tiefstand gesetzt."
+                f"Kein Alarm, Referenzwert bleibt unverändert."
             )
-            save_night_price(aktueller_preis)
 
     except Exception as e:
         print(f"Fehler bei der $NIGHT-Preisabfrage: {e}")
