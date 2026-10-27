@@ -5,7 +5,7 @@ import requests
 # --- CONFIGURATION ---
 STATE_FILE = "alarm_state.txt"
 UNTERE_GRENZE = 3
-OBERE_GRENZE = 62
+OBERE_GRENZE = 80
 NIGHT_PROZENT = 2  # Mindest-Preisanstieg in % für den $NIGHT-Preisalarm
 
 # NIGHT-SNEK Pool auf Minswap (LP Policy-ID + LP Token-Name zusammengesetzt)
